@@ -1,0 +1,187 @@
+# Production — single VM (backend + frontend + Traefik + Postgres)
+#
+#   cp .env.example .env
+#   __init__/start-fast-rio-prod.sh
+#
+# Stop:  __init__/stop-fast-rio-prod.sh
+# Reset: __init__/reset-fast-rio-prod.sh  (wipe DB/Redis + app images; keeps ./letsencrypt/)
+#
+# 1. Set DOMAIN below (e.g. example.com) and x-prod-app-config URLs/CORS.
+# 2. Point DNS A records at the VM public IP (CDN optional — origin is the VM):
+#
+#      Host          Type    Points to
+#      ------------  ------  ---------
+#      @             A       <VM IP>     → https://example.com (frontend)
+#      api           A       <VM IP>     → https://api.example.com (backend)
+#      adminer       A       <VM IP>     → https://adminer.example.com (optional)
+#
+# Adminer login (prod): server `db`, port 5432, credentials from .env — not localhost.
+#
+# 3. docker network create traefik-public   (once per VM)
+
+name: fast-rio
+
+include:
+  - compose.traefik.yml
+
+x-backend-image: &backend-image
+  image: fast-rio-backend:prod
+
+x-prod-app-config: &prod-app-config
+  DOMAIN: example.com
+  ENVIRONMENT: production
+  PROJECT_NAME: fast-rio
+  FRONTEND_HOST: https://example.com
+  BACKEND_CORS_ORIGINS: https://example.com,https://api.example.com
+
+services:
+  db:
+    image: postgres:18
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      retries: 5
+      start_period: 30s
+      timeout: 10s
+    volumes:
+      - db-data:/var/lib/postgresql/data/pgdata
+    env_file:
+      - .env
+    environment:
+      PGDATA: /var/lib/postgresql/data/pgdata
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD?Variable not set}
+      POSTGRES_USER: ${POSTGRES_USER?Variable not set}
+      POSTGRES_DB: ${POSTGRES_DB?Variable not set}
+
+  adminer:
+    image: adminer
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ADMINER_DESIGN: pepa-linha-dark
+    networks:
+      - traefik-public
+      - default
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=traefik-public
+      - traefik.constraint-label=traefik-public
+      - traefik.http.services.fast-rio-adminer.loadbalancer.server.port=8080
+      - traefik.http.routers.fast-rio-adminer-http.rule=Host(`adminer.${DOMAIN:-example.com}`)
+      - traefik.http.routers.fast-rio-adminer-http.entrypoints=http
+      - traefik.http.routers.fast-rio-adminer-http.middlewares=https-redirect
+      - traefik.http.routers.fast-rio-adminer-https.rule=Host(`adminer.${DOMAIN:-example.com}`)
+      - traefik.http.routers.fast-rio-adminer-https.entrypoints=https
+      - traefik.http.routers.fast-rio-adminer-https.tls.certresolver=le
+
+  prestart:
+    <<: *backend-image
+    restart: "no"
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    command: bash scripts/prestart.sh
+    environment:
+      <<: *prod-app-config
+      SECRET_KEY: ${SECRET_KEY?Variable not set}
+      FIRST_SUPERUSER: ${FIRST_SUPERUSER?Variable not set}
+      FIRST_SUPERUSER_PASSWORD: ${FIRST_SUPERUSER_PASSWORD?Variable not set}
+      POSTGRES_SERVER: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER?Variable not set}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD?Variable not set}
+      SENTRY_DSN: ${SENTRY_DSN}
+
+  backend:
+    <<: *backend-image
+    restart: always
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+      prestart:
+        condition: service_completed_successfully
+    networks:
+      - traefik-public
+      - default
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=traefik-public
+      - traefik.constraint-label=traefik-public
+      - traefik.http.services.fast-rio-backend.loadbalancer.server.port=8000
+      - traefik.http.routers.fast-rio-backend-http.rule=Host(`api.${DOMAIN:-example.com}`)
+      - traefik.http.routers.fast-rio-backend-http.entrypoints=http
+      - traefik.http.routers.fast-rio-backend-http.middlewares=https-redirect
+      - traefik.http.routers.fast-rio-backend-https.rule=Host(`api.${DOMAIN:-example.com}`)
+      - traefik.http.routers.fast-rio-backend-https.entrypoints=https
+      - traefik.http.routers.fast-rio-backend-https.tls.certresolver=le
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/utils/health-check/')",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    environment:
+      <<: *prod-app-config
+      SECRET_KEY: ${SECRET_KEY?Variable not set}
+      FIRST_SUPERUSER: ${FIRST_SUPERUSER?Variable not set}
+      FIRST_SUPERUSER_PASSWORD: ${FIRST_SUPERUSER_PASSWORD?Variable not set}
+      POSTGRES_SERVER: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER?Variable not set}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD?Variable not set}
+      SENTRY_DSN: ${SENTRY_DSN}
+
+  frontend:
+    image: fast-rio-frontend:prod
+    restart: always
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - traefik-public
+      - default
+    environment:
+      # Server-side HTTP from Rio → FastAPI (Docker network), not the public browser URL
+      PUBLIC_API_BASE_URL: http://backend:8000/api/v1
+      PORT: "5000"
+      HOST: "0.0.0.0"
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=traefik-public
+      - traefik.constraint-label=traefik-public
+      - traefik.http.services.fast-rio-frontend.loadbalancer.server.port=5000
+      - traefik.http.routers.fast-rio-frontend-http.rule=Host(`${DOMAIN:-example.com}`)
+      - traefik.http.routers.fast-rio-frontend-http.entrypoints=http
+      - traefik.http.routers.fast-rio-frontend-http.middlewares=https-redirect
+      - traefik.http.routers.fast-rio-frontend-https.rule=Host(`${DOMAIN:-example.com}`)
+      - traefik.http.routers.fast-rio-frontend-https.entrypoints=https
+      - traefik.http.routers.fast-rio-frontend-https.tls.certresolver=le
+
+volumes:
+  db-data:
+
+networks:
+  traefik-public:
+    name: traefik-public
+    external: true

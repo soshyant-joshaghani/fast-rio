@@ -1,0 +1,3 @@
+[app]
+app-type = "website"
+main-module = "src"

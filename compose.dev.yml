@@ -1,0 +1,140 @@
+# Dev infrastructure — DB + Traefik (+ Adminer).
+#
+# App processes run on the host with hot reload (see __init__/start-fast-rio-dev.bat):
+#   uvicorn --reload on :18000 (host 8000 is often Hyper-V-excluded on Windows)
+#   rio run on :5173
+#
+# Traefik routes (file provider → host.docker.internal):
+#   http://api.localhost        → localhost:18000
+#   http://dashboard.localhost  → localhost:5173
+#   http://adminer.localhost    → adminer container
+# Adminer login: server `db`, port 5432, credentials from .env (not localhost:15432). See Readme.md.
+# Traefik dashboard: http://localhost:18090
+# (host 8090 is often Hyper-V-excluded on Windows)
+
+name: fast-rio-dev
+
+x-backend-image: &backend-image
+  image: fast-rio-backend-dev:dev
+
+x-dev-env: &dev-env
+  env_file:
+    - .env
+
+x-dev-app-config: &dev-app-config
+  DOMAIN: localhost
+  ENVIRONMENT: local
+  PROJECT_NAME: fast-rio
+  FRONTEND_HOST: http://dashboard.localhost
+  BACKEND_CORS_ORIGINS: http://localhost,http://localhost:5173,http://localhost:18000,http://api.localhost,http://dashboard.localhost,http://adminer.localhost
+
+services:
+  db:
+    image: postgres:18
+    restart: "no"
+    <<: *dev-env
+    ports:
+      - "15432:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data/pgdata
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      retries: 5
+      start_period: 30s
+      timeout: 10s
+    environment:
+      PGDATA: /var/lib/postgresql/data/pgdata
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD?Variable not set}
+      POSTGRES_USER: ${POSTGRES_USER?Variable not set}
+      POSTGRES_DB: ${POSTGRES_DB?Variable not set}
+
+  adminer:
+    image: adminer
+    restart: "no"
+    depends_on:
+      - db
+    environment:
+      ADMINER_DESIGN: pepa-linha-dark
+    networks:
+      - traefik-public
+      - default
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=traefik-public
+      - traefik.constraint-label=traefik-public
+      - traefik.http.services.fast-rio-adminer.loadbalancer.server.port=8080
+      - traefik.http.routers.fast-rio-adminer-http.rule=Host(`adminer.localhost`)
+      - traefik.http.routers.fast-rio-adminer-http.entrypoints=http
+      - traefik.http.routers.fast-rio-adminer-http.middlewares=https-redirect
+      - traefik.http.routers.fast-rio-adminer-https.rule=Host(`adminer.localhost`)
+      - traefik.http.routers.fast-rio-adminer-https.entrypoints=https
+      - traefik.http.routers.fast-rio-adminer-https.tls=true
+
+  proxy:
+    image: traefik:3.6
+    restart: "no"
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    ports:
+      - "80:80"
+      - "443:443"
+      - "18090:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/dynamic.dev.yml:/etc/traefik/dynamic.dev.yml:ro
+    command:
+      - --providers.docker
+      - --providers.docker.constraints=Label(`traefik.constraint-label`, `traefik-public`)
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=traefik-public
+      - --providers.file.filename=/etc/traefik/dynamic.dev.yml
+      - --providers.file.watch=true
+      - --entrypoints.http.address=:80
+      - --entrypoints.https.address=:443
+      - --accesslog
+      - --log
+      - --log.level=INFO
+      - --api
+      - --api.insecure=true
+    labels:
+      - traefik.enable=true
+      - traefik.constraint-label=traefik-public
+      - traefik.http.middlewares.https-redirect.contenttype.autodetect=false
+    networks:
+      - traefik-public
+      - default
+
+  prestart:
+    <<: [*dev-env, *backend-image]
+    profiles:
+      - tools
+    restart: "no"
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    command: bash scripts/prestart.sh
+    volumes:
+      - ./backend:/app/backend
+      - ./tests:/app/tests
+    environment:
+      <<: *dev-app-config
+      SECRET_KEY: ${SECRET_KEY?Variable not set}
+      FIRST_SUPERUSER: ${FIRST_SUPERUSER?Variable not set}
+      FIRST_SUPERUSER_PASSWORD: ${FIRST_SUPERUSER_PASSWORD?Variable not set}
+      POSTGRES_SERVER: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER?Variable not set}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD?Variable not set}
+      SENTRY_DSN: ${SENTRY_DSN}
+
+volumes:
+  db-data:
+
+networks:
+  traefik-public:
+    name: traefik-public

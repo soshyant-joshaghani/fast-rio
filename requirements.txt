@@ -1,0 +1,22 @@
+# fast-rio — root Python deps (pip install -r requirements.txt)
+fastapi[standard]>=0.115.0,<1.0.0
+uvicorn[standard]>=0.32.0,<1.0.0
+sqlmodel>=0.0.22,<1.0.0
+alembic>=1.14.0,<2.0.0
+psycopg[binary]>=3.2.0,<4.0.0
+pydantic-settings>=2.6.0,<3.0.0
+email-validator>=2.2.0,<3.0.0
+tenacity>=9.0.0,<10.0.0
+python-jose[cryptography]>=3.3.0,<4.0.0
+passlib[bcrypt]>=1.7.4,<2.0.0
+bcrypt>=4.0.0,<4.1.0
+python-multipart>=0.0.12,<1.0.0
+scalar-fastapi>=1.8.0,<2.0.0
+
+# frontend (Rio UI) — [window] enables local desktop apps via run_in_window()
+rio-ui[window]>=0.12.2,<1.0.0
+
+# tests + HTTP client (backend tests + Rio → API)
+pytest>=8.3.0,<9.0.0
+httpx>=0.28.0,<1.0.0
+coverage>=7.6.0,<8.0.0

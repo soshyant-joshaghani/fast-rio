@@ -1,0 +1,20 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+
+logs/
+ssh_log_*.txt
+results_*.json
+*.log
+
+# Secrets / keys live in safe/ locally — never commit them
+safe/*.pem
+safe/*.key
+safe/*.env
+safe/id_*
+safe/*-address.txt
+!safe/README.md
+!safe/*.example

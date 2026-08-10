@@ -1,0 +1,16 @@
+.vscode/*
+!.vscode/extensions.json
+.venv/
+.env
+.venv/.fast-rio-deps-ok
+.env.local
+!.env.development
+!.env.production
+*.pyc
+__pycache__/
+.pytest_cache/
+.coverage
+htmlcov/
+.DS_Store
+letsencrypt/
+node_modules/

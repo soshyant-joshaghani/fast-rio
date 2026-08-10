@@ -1,0 +1,39 @@
+# Dev routes — host processes (Rio + uvicorn) and TLS for *.localhost.
+# After editing this file, recreate the proxy container (fsnotify does not
+# fire on Docker Desktop / Windows bind mounts):
+#   docker compose -f compose.dev.yml up -d --force-recreate --no-deps proxy
+
+http:
+  routers:
+    fast-rio-backend-host:
+      rule: Host(`api.localhost`)
+      entryPoints:
+        - http
+        - https
+      service: fast-rio-backend-host
+    fast-rio-frontend-host:
+      rule: Host(`dashboard.localhost`)
+      entryPoints:
+        - http
+        - https
+      service: fast-rio-frontend-host
+
+  services:
+    fast-rio-backend-host:
+      loadBalancer:
+        servers:
+          - url: http://host.docker.internal:18000
+    fast-rio-frontend-host:
+      loadBalancer:
+        servers:
+          - url: http://host.docker.internal:5173
+
+tls:
+  stores:
+    default:
+      defaultGeneratedCert:
+        resolver: default
+        domain:
+          main: localhost
+          sans:
+            - "*.localhost"

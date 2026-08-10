@@ -1,0 +1,5 @@
+* text=auto
+*.sh text eol=lf
+*.bat text eol=crlf
+backend/scripts/** text eol=lf
+__init__/** text eol=lf
